@@ -23,6 +23,7 @@ limitations under the License.
 
 
 %{
+#include "tensorflow/core/public/version.h"
 #include "tensorflow/c/tf_status_helper.h"
 #include "tensorflow/core/lib/core/status.h"
 #include "tensorflow/core/lib/core/stringpiece.h"
@@ -35,6 +36,18 @@ limitations under the License.
 #include "tensorflow/core/platform/file_system.h"
 %}
 // this part in moved from the deleted tf_session.i interface
+// TensorFlow version and GraphDef versions
+%constant const char* __version__ = TF_VERSION_STRING;
+%constant int GRAPH_DEF_VERSION = TF_GRAPH_DEF_VERSION;
+%constant int GRAPH_DEF_VERSION_MIN_CONSUMER = TF_GRAPH_DEF_VERSION_MIN_CONSUMER;
+%constant int GRAPH_DEF_VERSION_MIN_PRODUCER = TF_GRAPH_DEF_VERSION_MIN_PRODUCER;
+
+// Git version information
+%constant const char* __git_version__ = tf_git_version();
+
+// Compiler
+%constant const char* __compiler_version__ = tf_compiler_version();
+
 %ignoreall
 %unignore TF_Code;
 %unignore TF_Status; 

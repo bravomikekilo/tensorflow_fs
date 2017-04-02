@@ -30,7 +30,6 @@ cc_library(
     name = "c_api",
     srcs = [
         "c_api.cc",
-        "version.h",
     ],
     hdrs = ["c_api.h"],
     copts = tf_copts(),
