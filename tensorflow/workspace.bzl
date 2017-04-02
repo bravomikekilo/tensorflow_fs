@@ -1,5 +1,6 @@
 # TensorFlow external dependencies that can be loaded in WORKSPACE files.
 
+load("@io_bazel_rules_closure//closure/private:java_import_external.bzl", "java_import_external")
 load("@io_bazel_rules_closure//closure:defs.bzl", "filegroup_external")
 load("@io_bazel_rules_closure//closure:defs.bzl", "webfiles_external")
 load("//third_party/gpus:cuda_configure.bzl", "cuda_configure")
@@ -49,16 +50,53 @@ def _temp_workaround_http_archive_impl(repo_ctx):
                      }, False)
    repo_ctx.download_and_extract(repo_ctx.attr.urls, "", repo_ctx.attr.sha256,
                                  "", repo_ctx.attr.strip_prefix)
+   if repo_ctx.attr.patch_file != None:
+     _apply_patch(repo_ctx, repo_ctx.attr.patch_file)
 
 temp_workaround_http_archive = repository_rule(
    implementation=_temp_workaround_http_archive_impl,
    attrs = {
       "build_file": attr.label(),
       "repository": attr.string(),
+      "patch_file": attr.label(default = None),
       "urls": attr.string_list(default = []),
       "sha256": attr.string(default = ""),
       "strip_prefix": attr.string(default = ""),
    })
+
+# Executes specified command with arguments and calls 'fail' if it exited with non-zero code
+def _execute_and_check_ret_code(repo_ctx, cmd_and_args):
+  result = repo_ctx.execute(cmd_and_args)
+  if result.return_code != 0:
+    fail(("Non-zero return code({1}) when executing '{0}':\n" +
+          "Stdout: {2}\n" +
+          "Stderr: {3}").format(" ".join(cmd_and_args),
+                                result.return_code, result.stdout, result.stderr))
+
+# Apply a patch_file to the repository root directory
+# Runs 'patch -p1'
+def _apply_patch(repo_ctx, patch_file):
+  _execute_and_check_ret_code(repo_ctx, ["patch", "-p1",
+                                         "-d", repo_ctx.path("."),
+                                         "-i", repo_ctx.path(patch_file)])
+
+# Download the repository and apply a patch to its root
+def _patched_http_archive_impl(repo_ctx):
+  repo_ctx.download_and_extract(repo_ctx.attr.urls,
+                                sha256 = repo_ctx.attr.sha256,
+                                stripPrefix = repo_ctx.attr.strip_prefix)
+  _apply_patch(repo_ctx, repo_ctx.attr.patch_file)
+
+patched_http_archive = repository_rule(
+    implementation = _patched_http_archive_impl,
+    attrs = {
+      "patch_file": attr.label(),
+      "build_file": attr.label(),
+      "repository": attr.string(),
+      "urls": attr.string_list(default = []),
+      "sha256": attr.string(default = ""),
+      "strip_prefix": attr.string(default = ""),
+    })
 
 # If TensorFlow is linked as a submodule.
 # path_prefix and tf_repo_name are no longer used.
@@ -73,14 +111,14 @@ def tf_workspace(path_prefix = "", tf_repo_name = ""):
   native.new_http_archive(
       name = "eigen_archive",
       urls = [
-          "http://bazel-mirror.storage.googleapis.com/bitbucket.org/eigen/eigen/get/174e09eed96c.tar.gz",
-          "https://bitbucket.org/eigen/eigen/get/174e09eed96c.tar.gz",
+          "http://bazel-mirror.storage.googleapis.com/bitbucket.org/eigen/eigen/get/deff8b280204.tar.gz",
+          "https://bitbucket.org/eigen/eigen/get/deff8b280204.tar.gz",
       ],
-      sha256 = "38d4bda36435cd40e5235887cca8f108f8125d5a28eac471555efdf9d259020f",
-      strip_prefix = "eigen-eigen-174e09eed96c",
+      sha256 = "a39834683eb5bdb9a7434f0ab3621d2cbc3b07e8002db6de101e45ec536723eb",
+      strip_prefix = "eigen-eigen-deff8b280204",
       build_file = str(Label("//third_party:eigen.BUILD")),
   )
-  
+
   native.new_http_archive(
       name = "pcre",
       sha256 = "ccdf7e788769838f8285b3ee672ed573358202305ee361cfec7a4a4fb005bbc7",
@@ -108,24 +146,52 @@ def tf_workspace(path_prefix = "", tf_repo_name = ""):
       actual = "@six_archive//:six",
   )
 
-  native.http_archive(
+  patched_http_archive(
       name = "protobuf",
       urls = [
-          "http://bazel-mirror.storage.googleapis.com/github.com/google/protobuf/archive/ef927cc428db7bf41d3a593a16a8f1a0fe6306c5.tar.gz",
-          "https://github.com/google/protobuf/archive/ef927cc428db7bf41d3a593a16a8f1a0fe6306c5.tar.gz",
+          "http://bazel-mirror.storage.googleapis.com/github.com/google/protobuf/archive/2b7430d96aeff2bb624c8d52182ff5e4b9f7f18a.tar.gz",
+          "https://github.com/google/protobuf/archive/2b7430d96aeff2bb624c8d52182ff5e4b9f7f18a.tar.gz",
       ],
-      sha256 = "8813a4ab27f7c61565d0db17d69236b4ec0b1404371efc728f15079b85e457ca",
-      strip_prefix = "protobuf-ef927cc428db7bf41d3a593a16a8f1a0fe6306c5",
+      sha256 = "e5d3d4e227a0f7afb8745df049bbd4d55474b158ca5aaa2a0e31099af24be1d0",
+      strip_prefix = "protobuf-2b7430d96aeff2bb624c8d52182ff5e4b9f7f18a",
+      # TODO: remove patching when tensorflow stops linking same protos into
+      #       multiple shared libraries loaded in runtime by python.
+      #       This patch fixes a runtime crash when tensorflow is compiled
+      #       with clang -O2 on Linux (see https://github.com/tensorflow/tensorflow/issues/8394)
+      patch_file = str(Label("//third_party/protobuf:add_noinlines.patch")),
+  )
+
+  # We need to import the protobuf library under the names com_google_protobuf
+  # and com_google_protobuf_cc to enable proto_library support in bazel.
+  # Unfortunately there is no way to alias http_archives at the moment.
+  native.http_archive(
+      name = "com_google_protobuf",
+      urls = [
+          "http://bazel-mirror.storage.googleapis.com/github.com/google/protobuf/archive/2b7430d96aeff2bb624c8d52182ff5e4b9f7f18a.tar.gz",
+          "https://github.com/google/protobuf/archive/2b7430d96aeff2bb624c8d52182ff5e4b9f7f18a.tar.gz",
+      ],
+      sha256 = "e5d3d4e227a0f7afb8745df049bbd4d55474b158ca5aaa2a0e31099af24be1d0",
+      strip_prefix = "protobuf-2b7430d96aeff2bb624c8d52182ff5e4b9f7f18a",
+  )
+
+  native.http_archive(
+      name = "com_google_protobuf_cc",
+      urls = [
+          "http://bazel-mirror.storage.googleapis.com/github.com/google/protobuf/archive/2b7430d96aeff2bb624c8d52182ff5e4b9f7f18a.tar.gz",
+          "https://github.com/google/protobuf/archive/2b7430d96aeff2bb624c8d52182ff5e4b9f7f18a.tar.gz",
+      ],
+      sha256 = "e5d3d4e227a0f7afb8745df049bbd4d55474b158ca5aaa2a0e31099af24be1d0",
+      strip_prefix = "protobuf-2b7430d96aeff2bb624c8d52182ff5e4b9f7f18a",
   )
 
   native.new_http_archive(
       name = "gmock_archive",
       urls = [
-          "http://bazel-mirror.storage.googleapis.com/pkgs.fedoraproject.org/repo/pkgs/gmock/gmock-1.7.0.zip/073b984d8798ea1594f5e44d85b20d66/gmock-1.7.0.zip",
-          "http://pkgs.fedoraproject.org/repo/pkgs/gmock/gmock-1.7.0.zip/073b984d8798ea1594f5e44d85b20d66/gmock-1.7.0.zip",
+          "http://bazel-mirror.storage.googleapis.com/github.com/google/googletest/archive/release-1.8.0.zip",
+          "https://github.com/google/googletest/archive/release-1.8.0.zip",
       ],
-      sha256 = "26fcbb5925b74ad5fc8c26b0495dfc96353f4d553492eb97e85a8a6d2f43095b",
-      strip_prefix = "gmock-1.7.0",
+      sha256 = "f3ed3b58511efd272eb074a3a6d6fb79d7c2e6a0e374323d1e6bcbcc1ef141bf",
+      strip_prefix = "googletest-release-1.8.0",
       build_file = str(Label("//third_party:gmock.BUILD")),
   )
 
